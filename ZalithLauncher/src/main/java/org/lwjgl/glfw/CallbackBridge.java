@@ -532,6 +532,8 @@ public class CallbackBridge {
     @Keep public static native void nativeSetWindowAttrib(int attrib, int value);
     @Keep public static native void nativeSetGrabbing(boolean grab);
     @Keep public static native int getCurrentFps();
+    @Keep public static native long[] getFrameStats();
+    @Keep public static native void resetFrameStats();
 
     private static native ByteBuffer nativeCreateGamepadButtonBuffer();
     private static native ByteBuffer nativeCreateGamepadAxisBuffer();
