@@ -57,7 +57,6 @@ import com.movtery.zalithlauncher.R
 import com.movtery.zalithlauncher.ui.components.FloatingBall
 import com.movtery.zalithlauncher.ui.screens.content.elements.MemoryPreview
 import com.movtery.zalithlauncher.ui.screens.game.GamePerformanceSnapshot
-import kotlin.math.abs
 
 private val PerformanceGreen = Color(0xFF4CAF50)
 private val PerformanceYellow = Color(0xFFFFC107)
