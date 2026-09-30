@@ -44,6 +44,8 @@ import java.util.concurrent.CopyOnWriteArrayList
 
 private const val TAG = "AccountManager"
 
+private const val DEFAULT_OFFLINE_USERNAME = "Den"
+
 object AccountsManager {
     private val scope = CoroutineScope(Dispatchers.IO)
 
@@ -84,6 +86,31 @@ object AccountsManager {
     }
 
     /**
+     * 确保默认离线账号 "Den" 始终存在
+     *
+     * 使用 Minecraft OfflinePlayer 的确定性 UUID，
+     * 因此每次检查都不会创建重复账号。
+     */
+    private suspend fun ensureDefaultOfflineAccount() {
+        val profileId = getUUIDFromUserName(DEFAULT_OFFLINE_USERNAME).toString()
+
+        if (accountDao.getAccountByProfileId(profileId) == null) {
+            accountDao.saveAccount(
+                Account(
+                    username = DEFAULT_OFFLINE_USERNAME,
+                    profileId = profileId,
+                    accountType = AccountType.LOCAL.tag
+                )
+            )
+
+            Logger.info(
+                TAG,
+                "Created default offline account: $DEFAULT_OFFLINE_USERNAME"
+            )
+        }
+    }
+
+    /**
      * 刷新当前已登录的账号，已登录的账号保存在数据库中
      */
     fun reloadAccounts() {
@@ -100,6 +127,8 @@ object AccountsManager {
     }
 
     private suspend fun suspendReloadAccounts() {
+        ensureDefaultOfflineAccount()
+
         val loadedAccounts = accountDao.getAllAccounts()
         _accounts.clear()
         _accounts.addAll(loadedAccounts)
@@ -161,10 +190,21 @@ object AccountsManager {
         when {
             account.isNoLoginRequired() -> null
             account.isAuthServerAccount() -> {
-                otherLogin(context = context, account = account, onSuccess = onSuccess, onFailed = onFailed, onFinally = onFinally)
+                otherLogin(
+                    context = context,
+                    account = account,
+                    onSuccess = onSuccess,
+                    onFailed = onFailed,
+                    onFinally = onFinally
+                )
             }
             account.isMicrosoftAccount() -> {
-                microsoftRefresh(account = account, onSuccess = onSuccess, onFailed = onFailed, onFinally = onFinally)
+                microsoftRefresh(
+                    account = account,
+                    onSuccess = onSuccess,
+                    onFailed = onFailed,
+                    onFinally = onFinally
+                )
             }
             else -> null
         }
@@ -247,7 +287,7 @@ object AccountsManager {
     }
 
     private fun checkLimit(): Boolean {
-    return false
+        return false
     }
 
     /**
