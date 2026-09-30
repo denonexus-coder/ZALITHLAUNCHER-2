@@ -568,6 +568,7 @@ fun MemoryPreview(
     backgroundColor: Color = MaterialTheme.colorScheme.surfaceVariant,
     textStyle: TextStyle = MaterialTheme.typography.labelMedium,
     textColorOnMemory: Color = MaterialTheme.colorScheme.onPrimary,
+    dynamicColor: Boolean = false,
     textColorOnBackground: Color = MaterialTheme.colorScheme.onSurface,
     usedText: @Composable (usedMemory: Double, totalMemory: Double) -> String,
     previewText: (@Composable (preview: Double) -> String)? = null
@@ -588,9 +589,38 @@ fun MemoryPreview(
     }
 
     //计算已使用内存比例（基于总内存计算）
+    val targetUsedRatio = if (totalMemory > 0) {
+        (usedMemory.toFloat() / totalMemory.toFloat()).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+
     val usedRatio by animateFloatAsState(
-        targetValue = if (totalMemory > 0) usedMemory.toFloat() / totalMemory.toFloat() else 0f
+        targetValue = targetUsedRatio,
+        label = "memoryUsage"
     )
+
+    val memoryColor = if (dynamicColor) {
+        when {
+            targetUsedRatio >= 1f -> Color(0xFFB71C1C)
+            targetUsedRatio >= 0.90f -> Color(0xFFF44336)
+            targetUsedRatio >= 0.85f -> Color(0xFFFF9800)
+            targetUsedRatio >= 0.70f -> Color(0xFFFFC107)
+            else -> Color(0xFF4CAF50)
+        }
+    } else {
+        mainColor
+    }
+
+    val memoryTextColor = if (dynamicColor) {
+        when {
+            targetUsedRatio >= 0.70f && targetUsedRatio < 0.90f -> Color(0xFF111111)
+            else -> Color.White
+        }
+    } else {
+        textColorOnMemory
+    }
+    
     //预览内存比例（基于可用内存计算）
     val previewRatio = remember(preview, totalMemory, usedMemory) {
         if (preview != null && totalMemory > 0) {
