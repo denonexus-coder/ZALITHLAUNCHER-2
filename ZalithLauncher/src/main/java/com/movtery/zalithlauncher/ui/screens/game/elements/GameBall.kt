@@ -26,6 +26,7 @@ import androidx.compose.animation.expandIn
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkOut
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -36,27 +37,39 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentSize
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import com.movtery.zalithlauncher.R
 import com.movtery.zalithlauncher.ui.components.FloatingBall
 import com.movtery.zalithlauncher.ui.screens.content.elements.MemoryPreview
+import com.movtery.zalithlauncher.ui.screens.game.GamePerformanceSnapshot
+import kotlin.math.abs
+
+private val PerformanceGreen = Color(0xFF4CAF50)
+private val PerformanceYellow = Color(0xFFFFC107)
+private val PerformanceOrange = Color(0xFFFF9800)
+private val PerformanceRed = Color(0xFFF44336)
 
 @Composable
 fun DraggableGameBall(
     position: Offset,
     onPositionChanged: (Offset) -> Unit,
     onSavePos: () -> Unit,
-    gameFps: Int?,
+    gamePerformance: GamePerformanceSnapshot?,
     showMemory: Boolean,
     opened: Boolean,
     alpha: Float = 1f,
@@ -73,7 +86,7 @@ fun DraggableGameBall(
         alpha = alpha
     ) {
         GameBallContent(
-            gameFps = gameFps,
+            gamePerformance = gamePerformance,
             showMemory = showMemory,
             opened = opened,
         )
@@ -82,13 +95,11 @@ fun DraggableGameBall(
 
 @Composable
 private fun GameBallContent(
-    gameFps: Int?,
+    gamePerformance: GamePerformanceSnapshot?,
     showMemory: Boolean,
     opened: Boolean,
 ) {
-    val showFps = remember(gameFps) {
-        gameFps != null
-    }
+    val showPerformance = gamePerformance != null
 
     Row(
         modifier = Modifier.padding(all = 2.dp),
@@ -114,33 +125,30 @@ private fun GameBallContent(
         }
 
         AnimatedVisibility(
-            visible = showFps || showMemory
+            visible = showPerformance || showMemory
         ) {
             Spacer(Modifier.width(4.dp))
         }
 
-        //实际内容
         Column(
             modifier = Modifier
                 .wrapContentSize()
                 .animateContentSize()
         ) {
             CustomAnimatedVisibility(
-                visible = showFps || showMemory
+                visible = showPerformance || showMemory
             ) {
                 Spacer(Modifier.height(4.dp))
             }
-            //帧率显示
+
             CustomAnimatedVisibility(
-                visible = showFps
+                visible = showPerformance
             ) {
-                Text(
-                    modifier = Modifier.padding(end = 4.dp),
-                    text = "FPS: ${gameFps ?: 0}",
-                    style = MaterialTheme.typography.labelMedium
-                )
+                gamePerformance?.let { snapshot ->
+                    PerformanceMetrics(snapshot)
+                }
             }
-            //内存显示
+
             CustomAnimatedVisibility(
                 visible = showMemory
             ) {
@@ -151,18 +159,190 @@ private fun GameBallContent(
                     mainColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
                     backgroundColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
                     textStyle = MaterialTheme.typography.labelSmall,
+                    dynamicColor = true,
                     usedText = { usedMemory, totalMemory ->
                         "${usedMemory.toInt()}MB/${totalMemory.toInt()}MB"
                     }
                 )
             }
+
             CustomAnimatedVisibility(
-                visible = showFps || showMemory
+                visible = showPerformance || showMemory
             ) {
                 Spacer(Modifier.height(4.dp))
             }
         }
     }
+}
+
+@Composable
+private fun PerformanceMetrics(
+    snapshot: GamePerformanceSnapshot
+) {
+    val current = snapshot.current
+    val previous = snapshot.previous
+
+    Row(
+        modifier = Modifier.padding(end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        PerformanceMetric(
+            label = "FPS",
+            value = current.fps.toString(),
+            color = fpsColor(current.fps),
+            direction = direction(
+                current.fps.toDouble(),
+                previous?.fps?.toDouble()
+            )
+        )
+
+        MetricSeparator()
+
+        PerformanceMetric(
+            label = "Min",
+            value = current.minFps.toString(),
+            color = fpsColor(current.minFps),
+            direction = direction(
+                current.minFps.toDouble(),
+                previous?.minFps?.toDouble()
+            )
+        )
+
+        MetricSeparator()
+
+        PerformanceMetric(
+            label = "Med",
+            value = current.averageFps.toString(),
+            color = fpsColor(current.averageFps),
+            direction = direction(
+                current.averageFps.toDouble(),
+                previous?.averageFps?.toDouble()
+            )
+        )
+
+        MetricSeparator()
+
+        PerformanceMetric(
+            label = "Max",
+            value = current.maxFps.toString(),
+            color = fpsColor(current.maxFps),
+            direction = direction(
+                current.maxFps.toDouble(),
+                previous?.maxFps?.toDouble()
+            )
+        )
+
+        MetricSeparator()
+
+        PerformanceMetric(
+            label = "Frame",
+            value = formatFrameTime(current.frameTimeMs),
+            color = frameTimeColor(current.frameTimeMs),
+            direction = direction(
+                current.frameTimeMs,
+                previous?.frameTimeMs
+            ),
+            suffix = " ms"
+        )
+    }
+}
+
+@Composable
+private fun PerformanceMetric(
+    label: String,
+    value: String,
+    color: Color,
+    direction: Int,
+    suffix: String = ""
+) {
+    Box(
+        modifier = Modifier
+            .background(
+                color = color.copy(alpha = 0.16f),
+                shape = RoundedCornerShape(7.dp)
+            )
+            .padding(
+                horizontal = 5.dp,
+                vertical = 2.dp
+            )
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = label,
+                color = color,
+                style = MaterialTheme.typography.labelSmall
+            )
+
+            Spacer(Modifier.width(3.dp))
+
+            Text(
+                text = value + suffix,
+                color = color,
+                style = MaterialTheme.typography.labelSmall
+            )
+
+            if (direction != 0) {
+                Spacer(Modifier.width(2.dp))
+
+                Text(
+                    text = if (direction > 0) "↑" else "↓",
+                    color = color,
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MetricSeparator() {
+    Text(
+        text = "●",
+        modifier = Modifier.padding(horizontal = 2.dp),
+        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
+        style = MaterialTheme.typography.labelSmall
+    )
+}
+
+private fun direction(
+    current: Double,
+    previous: Double?
+): Int {
+    if (previous == null) return 0
+
+    return when {
+        current > previous -> 1
+        current < previous -> -1
+        else -> 0
+    }
+}
+
+private fun fpsColor(fps: Int): Color {
+    return when {
+        fps >= 60 -> PerformanceGreen
+        fps >= 45 -> PerformanceYellow
+        fps >= 30 -> PerformanceOrange
+        else -> PerformanceRed
+    }
+}
+
+private fun frameTimeColor(frameTimeMs: Double): Color {
+    return when {
+        frameTimeMs <= 0.0 -> PerformanceRed
+        frameTimeMs <= 16.7 -> PerformanceGreen
+        frameTimeMs <= 22.2 -> PerformanceYellow
+        frameTimeMs <= 33.3 -> PerformanceOrange
+        else -> PerformanceRed
+    }
+}
+
+private fun formatFrameTime(frameTimeMs: Double): String {
+    if (frameTimeMs <= 0.0) return "0.0"
+
+    val rounded = kotlin.math.round(frameTimeMs * 10.0) / 10.0
+    return rounded.toString()
 }
 
 @Composable
