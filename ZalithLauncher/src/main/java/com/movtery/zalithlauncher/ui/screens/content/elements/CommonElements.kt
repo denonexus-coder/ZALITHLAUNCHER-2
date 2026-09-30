@@ -141,10 +141,13 @@ data class CategoryItem(
 enum class SortByEnum(val textRes: Int) {
     /** 按照名称排序 */
     Name(R.string.sort_by_name),
+
     /** 按照文件名称排序 */
     FileName(R.string.sort_by_file_name),
+
     /** 按照文件上次修改时间排序 */
     FileModifiedTime(R.string.sort_by_last_modified),
+
     /** 按照上次游玩时间排序 */
     LastPlayed(R.string.sort_by_last_played)
 }
@@ -174,7 +177,9 @@ fun SortByDropdownMenu(
     ) {
         enums.forEach { item ->
             DropdownMenuItem(
-                text = { Text(stringResource(item.textRes)) },
+                text = {
+                    Text(stringResource(item.textRes))
+                },
                 onClick = {
                     onEnumChanged(item)
                 },
@@ -186,14 +191,19 @@ fun SortByDropdownMenu(
                             val rotation by animateFloatAsState(
                                 if (isAscending) 0f else 180f
                             )
+
                             Icon(
                                 modifier = Modifier.rotate(rotation),
-                                painter = painterResource(R.drawable.ic_keyboard_double_arrow_up),
+                                painter = painterResource(
+                                    R.drawable.ic_keyboard_double_arrow_up
+                                ),
                                 contentDescription = null
                             )
                         }
                     }
-                } else null
+                } else {
+                    null
+                }
             )
         }
     }
@@ -230,34 +240,62 @@ fun rememberMultipleUriImportTaskBuilder(
                     task = { task ->
                         task.updateProgress(-1f)
                         task.updateMessage(null)
+
                         uris.forEach { uri ->
                             try {
-                                val fileName = context.getFileName(uri) ?: throw IOException("Failed to get file name")
+                                val fileName =
+                                    context.getFileName(uri)
+                                        ?: throw IOException(
+                                            "Failed to get file name"
+                                        )
+
                                 task.updateProgress(-1f)
-                                task.updateMessage(androidText(fileName))
+                                task.updateMessage(
+                                    androidText(fileName)
+                                )
+
                                 val outputFile = File(targetDir, fileName)
+
                                 if (checkExtension != null) {
-                                    outputFile.checkExtensionOrThrow(checkExtension)
+                                    outputFile.checkExtensionOrThrow(
+                                        checkExtension
+                                    )
                                 }
-                                context.copyLocalFile(uri, outputFile)
+
+                                context.copyLocalFile(
+                                    uri,
+                                    outputFile
+                                )
+
                                 //成功复制，如调用者有额外操作，可使用回调运行
-                                cOnFileCopied(task, outputFile)
+                                cOnFileCopied(
+                                    task,
+                                    outputFile
+                                )
                             } catch (e: Exception) {
-                                val eString = e.getMessageOrToString()
-                                val messageString = if (cErrorMessage != null) {
-                                    cErrorMessage + "\n" + eString
-                                } else {
-                                    eString
-                                }
+                                val eString =
+                                    e.getMessageOrToString()
+
+                                val messageString =
+                                    if (cErrorMessage != null) {
+                                        cErrorMessage + "\n" + eString
+                                    } else {
+                                        eString
+                                    }
 
                                 cSubmitError(
                                     ErrorViewModel.ThrowableMessage(
-                                        title = androidText(cErrorTitle),
-                                        message = androidText(messageString)
+                                        title = androidText(
+                                            cErrorTitle
+                                        ),
+                                        message = androidText(
+                                            messageString
+                                        )
                                     )
                                 )
                             }
                         }
+
                         cOnImported()
                     }
                 )
@@ -277,15 +315,19 @@ fun ImportMultipleFileButton(
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetMultipleContents()
     ) { uris ->
-        uris.takeIf { it.isNotEmpty() }?.let { uris1 ->
-            progressUris(uris1)
-        }
+        uris
+            .takeIf { it.isNotEmpty() }
+            ?.let { uris1 ->
+                progressUris(uris1)
+            }
     }
 
     IconTextButton(
         modifier = modifier,
         onClick = {
-            launcher.launch(extension.extensionToMimeType())
+            launcher.launch(
+                extension.extensionToMimeType()
+            )
         },
         painter = painter,
         text = text
@@ -314,15 +356,23 @@ fun ImportSingleFileButton(
         modifier = modifier,
         onClick = {
             onClick()
-            launcher.launch(extension.extensionToMimeType())
+            launcher.launch(
+                extension.extensionToMimeType()
+            )
         },
         painter = painter,
         text = text,
         onLongClick = {
             if (onLongClick != null) {
-                onLongClick { launcher.launch(extension.extensionToMimeType()) }
+                onLongClick {
+                    launcher.launch(
+                        extension.extensionToMimeType()
+                    )
+                }
             } else {
-                launcher.launch(extension.extensionToMimeType())
+                launcher.launch(
+                    extension.extensionToMimeType()
+                )
             }
         }
     )
@@ -331,7 +381,9 @@ fun ImportSingleFileButton(
 @Composable
 fun <I, O> ImportFileButton(
     contract: ActivityResultContract<I, O>,
-    onLaunch: (launcher: ManagedActivityResultLauncher<I, O>) -> Unit,
+    onLaunch: (
+        launcher: ManagedActivityResultLauncher<I, O>
+    ) -> Unit,
     progressOutput: (output: O) -> Unit,
     modifier: Modifier = Modifier,
     painter: Painter = painterResource(R.drawable.ic_add),
@@ -368,19 +420,28 @@ fun TitleTaskFlowDialog(
     ) {
         BoxWithConstraints(
             modifier = Modifier
-                .heightIn(max = rememberDialogMaxHeight())
+                .heightIn(
+                    max = rememberDialogMaxHeight()
+                )
                 .fillMaxHeight(),
             contentAlignment = Alignment.Center
         ) {
             Surface(
                 modifier = Modifier
                     .padding(all = 6.dp)
-                    .heightIn(max = (maxHeight - 12.dp).coerceAtMost(rememberDialogMaxHeight()))
+                    .heightIn(
+                        max = (maxHeight - 12.dp)
+                            .coerceAtMost(
+                                rememberDialogMaxHeight()
+                            )
+                    )
                     .wrapContentHeight()
                     .then(
                         if (logOutput != null) {
                             Modifier.fillMaxWidth(0.8f)
-                        } else Modifier
+                        } else {
+                            Modifier
+                        }
                     ),
                 shape = MaterialTheme.shapes.extraLarge,
                 color = cardColor(false),
@@ -395,18 +456,23 @@ fun TitleTaskFlowDialog(
                         TaskFlowListColumn(
                             title = title,
                             tasks = tasks,
-                            modifier = Modifier.weight(1f, fill = false)
+                            modifier = Modifier.weight(
+                                1f,
+                                fill = false
+                            )
                         )
                     } else {
                         Row(
                             modifier = Modifier.weight(1f),
-                            horizontalArrangement = Arrangement.spacedBy(16.dp)
+                            horizontalArrangement =
+                                Arrangement.spacedBy(16.dp)
                         ) {
                             TaskFlowListColumn(
                                 title = title,
                                 tasks = tasks,
                                 modifier = Modifier.weight(1f)
                             )
+
                             TaskLogCard(
                                 logOutput = logOutput,
                                 modifier = Modifier
@@ -420,7 +486,11 @@ fun TitleTaskFlowDialog(
                         modifier = Modifier.fillMaxWidth(),
                         onClick = onCancel
                     ) {
-                        MarqueeText(text = stringResource(R.string.generic_cancel))
+                        MarqueeText(
+                            text = stringResource(
+                                R.string.generic_cancel
+                            )
+                        )
                     }
                 }
             }
@@ -445,6 +515,7 @@ private fun TaskFlowListColumn(
         )
 
         val scrollState = rememberLazyListState()
+
         LazyColumn(
             modifier = Modifier
                 .fadeEdge(state = scrollState)
@@ -483,57 +554,77 @@ private fun InstallingTaskItem(
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         val icon = when (taskStage) {
-            TaskStage.PREPARING -> R.drawable.ic_schedule_outlined
-            TaskStage.RUNNING -> runningIcon ?: R.drawable.ic_download
-            TaskStage.COMPLETED -> R.drawable.ic_check
+            TaskStage.PREPARING ->
+                R.drawable.ic_schedule_outlined
+
+            TaskStage.RUNNING ->
+                runningIcon ?: R.drawable.ic_download
+
+            TaskStage.COMPLETED ->
+                R.drawable.ic_check
         }
+
         Icon(
             modifier = Modifier.size(24.dp),
             painter = painterResource(icon),
             contentDescription = null
         )
 
-        Column(modifier = modifier.weight(1f)) {
+        Column(
+            modifier = modifier.weight(1f)
+        ) {
             AndroidStringText(
                 text = title,
                 style = MaterialTheme.typography.labelLarge
             )
+
             if (taskStage == TaskStage.RUNNING) {
                 taskMessage?.let { message ->
                     AndroidStringText(
                         modifier = Modifier.padding(top = 4.dp),
                         text = message,
-                        style = MaterialTheme.typography.labelMedium,
+                        style = MaterialTheme.typography.labelMedium
                     )
                 }
+
                 @Composable
                 fun RateBytesPerSecText() {
                     rateBytesPerSec?.let { bytes ->
-                        val text = remember(bytes) { "${formatFileSize(bytes)}/s" }
+                        val text = remember(bytes) {
+                            "${formatFileSize(bytes)}/s"
+                        }
+
                         Text(
                             text = text,
                             style = MaterialTheme.typography.labelMedium
                         )
                     }
                 }
-                if (taskProgress < 0) { //负数则代表不确定
+
+                if (taskProgress < 0) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        horizontalArrangement =
+                            Arrangement.spacedBy(8.dp),
+                        verticalAlignment =
+                            Alignment.CenterVertically
                     ) {
                         LinearProgressIndicator(
                             modifier = Modifier.weight(1f)
                         )
+
                         RateBytesPerSecText()
                     }
                 } else {
-                    val progressText = "${(taskProgress * 100).toInt()}%"
+                    val progressText =
+                        "${(taskProgress * 100).toInt()}%"
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        horizontalArrangement =
+                            Arrangement.spacedBy(8.dp),
+                        verticalAlignment =
+                            Alignment.CenterVertically
                     ) {
                         LinearProgressIndicator(
                             progress = { taskProgress },
@@ -541,7 +632,9 @@ private fun InstallingTaskItem(
                                 .weight(1f)
                                 .align(Alignment.CenterVertically)
                         )
+
                         RateBytesPerSecText()
+
                         Text(
                             text = progressText,
                             style = MaterialTheme.typography.labelMedium
@@ -556,8 +649,10 @@ private fun InstallingTaskItem(
 /**
  * 内存显示（已使用、内存预览、总内存）
  * 可以直观的展示当前设备的运行内存可用情况
+ *
  * @param delay 计算内存信息频率间隔时间
  * @param preview 需要预览的内存，将展示在所有可用内存中的占用情况（单位:MB）
+ * @param dynamicColor 是否根据内存使用率动态改变已使用区域颜色
  */
 @Composable
 fun MemoryPreview(
@@ -570,92 +665,156 @@ fun MemoryPreview(
     textColorOnMemory: Color = MaterialTheme.colorScheme.onPrimary,
     dynamicColor: Boolean = false,
     textColorOnBackground: Color = MaterialTheme.colorScheme.onSurface,
-    usedText: @Composable (usedMemory: Double, totalMemory: Double) -> String,
-    previewText: (@Composable (preview: Double) -> String)? = null
+    usedText: @Composable (
+        usedMemory: Double,
+        totalMemory: Double
+    ) -> String,
+    previewText: (
+        @Composable (preview: Double) -> String
+    )? = null
 ) {
     val context = LocalContext.current
 
-    //总内存、已使用内存（单位：MB）
-    var totalMemory by remember { mutableDoubleStateOf(0.0) }
-    var usedMemory by remember { mutableDoubleStateOf(0.0) }
+    // 总内存、已使用内存（单位：MB）
+    var totalMemory by remember {
+        mutableDoubleStateOf(0.0)
+    }
+
+    var usedMemory by remember {
+        mutableDoubleStateOf(0.0)
+    }
 
     LaunchedEffect(Unit) {
         infinityCancellableBlock(delay = delay) {
-            //总内存
-            totalMemory = getTotalMemory(context).bytesToMB()
-            //已使用内存
-            usedMemory = getUsedMemory(context).bytesToMB()
+            totalMemory =
+                getTotalMemory(context).bytesToMB()
+
+            usedMemory =
+                getUsedMemory(context).bytesToMB()
         }
     }
 
-    //计算已使用内存比例（基于总内存计算）
-    val targetUsedRatio = if (totalMemory > 0) {
-        (usedMemory.toFloat() / totalMemory.toFloat()).coerceIn(0f, 1f)
-    } else {
-        0f
-    }
+    // 计算已使用内存比例
+    val targetUsedRatio =
+        if (totalMemory > 0.0) {
+            (usedMemory / totalMemory)
+                .toFloat()
+                .coerceIn(0f, 1f)
+        } else {
+            0f
+        }
 
+    // 平滑更新进度条
     val usedRatio by animateFloatAsState(
         targetValue = targetUsedRatio,
         label = "memoryUsage"
     )
 
+    /*
+     * 动态内存颜色：
+     *
+     * < 70%    -> 绿色
+     * 70-84%   -> 黄色
+     * 85-89%   -> 橙色
+     * 90-99%   -> 红色
+     * >= 100%  -> 深红色
+     */
     val memoryColor = if (dynamicColor) {
         when {
-            targetUsedRatio >= 1f -> Color(0xFFB71C1C)
-            targetUsedRatio >= 0.90f -> Color(0xFFF44336)
-            targetUsedRatio >= 0.85f -> Color(0xFFFF9800)
-            targetUsedRatio >= 0.70f -> Color(0xFFFFC107)
-            else -> Color(0xFF4CAF50)
+            targetUsedRatio >= 1f ->
+                Color(0xFFB71C1C)
+
+            targetUsedRatio >= 0.90f ->
+                Color(0xFFF44336)
+
+            targetUsedRatio >= 0.85f ->
+                Color(0xFFFF9800)
+
+            targetUsedRatio >= 0.70f ->
+                Color(0xFFFFC107)
+
+            else ->
+                Color(0xFF4CAF50)
         }
     } else {
         mainColor
     }
 
+    /*
+     * Texto com contraste adequado.
+     *
+     * Amarelo/laranja -> texto escuro
+     * Verde/vermelho  -> texto branco
+     */
     val memoryTextColor = if (dynamicColor) {
         when {
-            targetUsedRatio >= 0.70f && targetUsedRatio < 0.90f -> Color(0xFF111111)
-            else -> Color.White
+            targetUsedRatio >= 0.70f &&
+                targetUsedRatio < 0.90f -> {
+                Color(0xFF111111)
+            }
+
+            else -> {
+                Color.White
+            }
         }
     } else {
         textColorOnMemory
     }
-    
-    //预览内存比例（基于可用内存计算）
-    val previewRatio = remember(preview, totalMemory, usedMemory) {
-        if (preview != null && totalMemory > 0) {
-            //可用内存，这里不使用getFreeMemory函数
-            val availableMemory = totalMemory.toFloat() - usedMemory.toFloat()
-            if (availableMemory > 0) preview.toFloat() / availableMemory else 0f
-        } else 0f
+
+    /*
+     * Preview representa memória adicional em relação
+     * à memória disponível.
+     */
+    val previewRatio = remember(
+        preview,
+        totalMemory,
+        usedMemory
+    ) {
+        if (preview != null && totalMemory > 0.0) {
+            val availableMemory =
+                totalMemory - usedMemory
+
+            if (availableMemory > 0.0) {
+                (preview / availableMemory)
+                    .toFloat()
+                    .coerceIn(0f, 1f)
+            } else {
+                0f
+            }
+        } else {
+            0f
+        }
     }
 
-    //内存进度条直观展示
     Box(
         modifier = modifier
             .height(IntrinsicSize.Min)
             .clip(RoundedCornerShape(12.dp))
             .background(backgroundColor)
     ) {
-        val usedText = usedText(usedMemory, totalMemory)
+        val usedMemoryText =
+            usedText(
+                usedMemory,
+                totalMemory
+            )
 
         @Composable
         fun UsedMemoryText(
             modifier: Modifier = Modifier,
-            textColor: Color = textColorOnMemory,
+            textColor: Color = memoryTextColor,
             marquee: Boolean = true
         ) {
             if (marquee) {
                 MarqueeText(
                     modifier = modifier,
-                    text = usedText,
+                    text = usedMemoryText,
                     style = textStyle,
                     color = textColor
                 )
             } else {
                 Text(
                     modifier = modifier,
-                    text = usedText,
+                    text = usedMemoryText,
                     style = textStyle,
                     color = textColor,
                     softWrap = false,
@@ -664,17 +823,32 @@ fun MemoryPreview(
             }
         }
 
+        /*
+         * Quando não existe preview, mostra o texto
+         * diretamente sobre o fundo.
+         */
         if (preview == null) {
             UsedMemoryText(
-                modifier = Modifier.padding(horizontal = 8.dp),
+                modifier = Modifier.padding(
+                    horizontal = 8.dp
+                ),
                 textColor = textColorOnBackground,
-                marquee = false,
+                marquee = false
             )
         }
 
-        Row(modifier = Modifier.fillMaxWidth()) {
-            //已使用内存部分
-            if (usedRatio > 0) {
+        Row(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            /*
+             * MEMÓRIA UTILIZADA
+             *
+             * Aqui está a correção principal:
+             * antes usava mainColor diretamente.
+             * Agora usa memoryColor, permitindo
+             * a mudança verde/amarelo/laranja/vermelho.
+             */
+            if (usedRatio > 0f) {
                 Box(
                     modifier = Modifier
                         .fillMaxHeight()
@@ -683,55 +857,108 @@ fun MemoryPreview(
                             RoundedCornerShape(
                                 topStart = 12.dp,
                                 bottomStart = 12.dp,
-                                topEnd = if (usedRatio == 1f) 12.dp else 0.dp,
-                                bottomEnd = if (usedRatio == 1f) 12.dp else 0.dp
+                                topEnd = if (
+                                    usedRatio == 1f
+                                ) {
+                                    12.dp
+                                } else {
+                                    0.dp
+                                },
+                                bottomEnd = if (
+                                    usedRatio == 1f
+                                ) {
+                                    12.dp
+                                } else {
+                                    0.dp
+                                }
                             )
                         )
-                        .background(mainColor),
+                        .background(memoryColor),
                     contentAlignment = Alignment.CenterStart
                 ) {
                     if (preview != null) {
                         UsedMemoryText(
-                            modifier = Modifier.padding(horizontal = 8.dp)
+                            modifier = Modifier.padding(
+                                horizontal = 8.dp
+                            ),
+                            textColor = memoryTextColor
                         )
                     } else {
                         UsedMemoryText(
                             modifier = Modifier
                                 .width(IntrinsicSize.Max)
                                 .padding(start = 8.dp),
-                            textColor = textColorOnMemory,
-                            marquee = false,
+                            textColor = memoryTextColor,
+                            marquee = false
                         )
                     }
                 }
             }
 
-            Row(modifier = Modifier.weight(1f)) {
-                //预览内存部分
-                if (preview != null && previewRatio > 0f) {
+            /*
+             * MEMÓRIA DE PREVIEW
+             */
+            Row(
+                modifier = Modifier.weight(1f)
+            ) {
+                if (
+                    preview != null &&
+                    previewRatio > 0f
+                ) {
                     Box(
                         modifier = Modifier
                             .fillMaxHeight()
                             .fillMaxWidth(previewRatio)
                             .clip(
                                 RoundedCornerShape(
-                                    topStart = if (usedRatio == 0f) 12.dp else 0.dp,
-                                    bottomStart = if (usedRatio == 0f) 12.dp else 0.dp,
-                                    topEnd = if (previewRatio == 1f) 12.dp else 0.dp,
-                                    bottomEnd = if (previewRatio == 1f) 12.dp else 0.dp
+                                    topStart = if (
+                                        usedRatio == 0f
+                                    ) {
+                                        12.dp
+                                    } else {
+                                        0.dp
+                                    },
+                                    bottomStart = if (
+                                        usedRatio == 0f
+                                    ) {
+                                        12.dp
+                                    } else {
+                                        0.dp
+                                    },
+                                    topEnd = if (
+                                        previewRatio == 1f
+                                    ) {
+                                        12.dp
+                                    } else {
+                                        0.dp
+                                    },
+                                    bottomEnd = if (
+                                        previewRatio == 1f
+                                    ) {
+                                        12.dp
+                                    } else {
+                                        0.dp
+                                    }
                                 )
                             )
-                            .background(mainColor.copy(alpha = 0.5f)),
-                        contentAlignment = Alignment.CenterStart
+                            .background(
+                                mainColor.copy(alpha = 0.5f)
+                            ),
+                        contentAlignment =
+                            Alignment.CenterStart
                     ) {
-                        previewText?.invoke(preview)?.let { text ->
-                            MarqueeText(
-                                modifier = Modifier.padding(horizontal = 8.dp),
-                                text = text,
-                                style = textStyle,
-                                color = textColorOnMemory
-                            )
-                        }
+                        previewText
+                            ?.invoke(preview)
+                            ?.let { text ->
+                                MarqueeText(
+                                    modifier = Modifier.padding(
+                                        horizontal = 8.dp
+                                    ),
+                                    text = text,
+                                    style = textStyle,
+                                    color = textColorOnMemory
+                                )
+                            }
                     }
                 }
             }
