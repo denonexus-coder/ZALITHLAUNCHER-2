@@ -157,30 +157,48 @@ private class GameViewModel(
     /** 鼠标触摸指针处理层占用指针列表 */
     var occupiedPointers = mutableSetOf<PointerId>()
 
-    /** 游戏内帧率状态 */
-    var gameFps by mutableIntStateOf(0)
-        private set
-    private var fpsJob: Job? = null
-    /** 开始帧率捕获 */
-    fun startFpsCapture() {
-        //开启一个新的协程，每秒更新一次帧率数据
-        fpsJob = viewModelScope.launch(Dispatchers.Default) {
-            while (true) {
-                runCatching {
-                    ensureActive()
-                }.onFailure {
-                    break
-                }
-                gameFps = CallbackBridge.getCurrentFps()
-                delay(1000L.milliseconds)
+    /** 游戏内性能状态 */
+var gamePerformance by mutableStateOf<GamePerformanceSnapshot?>(null)
+    private set
+
+private var fpsJob: Job? = null
+
+/** 开始性能数据捕获 */
+fun startFpsCapture() {
+    fpsJob?.cancel()
+    CallbackBridge.resetFrameStats()
+    gamePerformance = null
+
+    fpsJob = viewModelScope.launch(Dispatchers.Default) {
+        while (true) {
+            runCatching {
+                ensureActive()
+            }.onFailure {
+                break
             }
+
+            runCatching {
+                val nativeStats = CallbackBridge.getFrameStats()
+                val current = GamePerformanceStats.fromNative(nativeStats)
+                val previous = gamePerformance?.current
+
+                gamePerformance = GamePerformanceSnapshot(
+                    current = current,
+                    previous = previous
+                )
+            }
+
+            delay(250L.milliseconds)
         }
     }
-    /** 停止帧率捕获 */
-    fun stopFpsCapture() {
-        fpsJob?.cancel()
-        fpsJob = null
-    }
+}
+
+/** 停止性能数据捕获 */
+fun stopFpsCapture() {
+    fpsJob?.cancel()
+    fpsJob = null
+    gamePerformance = null
+}
 
     var editorRefresh by mutableIntStateOf(0)
         private set
@@ -741,14 +759,17 @@ fun GameScreen(
                 //在这里根据设置决定是否启用帧率捕获协程
                 val showFps = AllSettings.showFPS.state
                 DisposableEffect(showFps) {
-                    if (showFps) viewModel.startFpsCapture()
+                    if (showFps) {
+                        viewModel.startFpsCapture()
+                    }
+                    
                     onDispose {
                         viewModel.stopFpsCapture()
                     }
                 }
-
-                val gameFps: Int? = if (showFps) {
-                    viewModel.gameFps
+                
+                val gamePerformance: GamePerformanceSnapshot? = if (showFps) {
+                    viewModel.gamePerformance
                 } else {
                     null
                 }
@@ -761,7 +782,7 @@ fun GameScreen(
                     onSavePos = {
                         AllSettings.menuBallPos.save()
                     },
-                    gameFps = gameFps,
+                    gamePerformance = gamePerformance,
                     showMemory = AllSettings.showMemory.state,
                     opened = viewModel.gameMenuState == MenuState.SHOW,
                     alpha = AllSettings.menuBallOpacity.state / 100f,
