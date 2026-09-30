@@ -4,6 +4,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
@@ -15,6 +16,7 @@
 
 #include <EGL/egl.h>
 #include <GL/osmesa.h>
+
 #include "ctxbridges/egl_loader.h"
 #include "ctxbridges/osmesa_loader.h"
 #include "ctxbridges/renderer_config.h"
@@ -37,26 +39,55 @@
 #include "ctxbridges/osm_bridge.h"
 
 #define GLFW_CLIENT_API 0x22001
+
 /* Consider GLFW_NO_API as Vulkan API */
 #define GLFW_NO_API 0
+
 #define GLFW_OPENGL_API 0x30001
 
-// This means that the function is an external API and that it will be used
+/* This means that the function is an external API
+ * and that it will be used.
+ */
 #define EXTERNAL_API __attribute__((used))
-// This means that you are forced to have this function/variable for ABI compatibility
+
+/* This means that you are forced to have this
+ * function/variable for ABI compatibility.
+ */
 #define ABI_COMPAT __attribute__((unused))
+
 
 EGLConfig config;
 struct PotatoBridge potatoBridge;
 
-// MC 最近一次请求的交换间隔；-1 表示尚未请求
+
+/*
+ * ============================================================
+ * Swap interval state
+ * ============================================================
+ *
+ * MC's latest requested swap interval.
+ *
+ * -1 means that Minecraft has not requested one yet.
+ */
 static int lastSwapInterval = -1;
 
-void* loadTurnipVulkan(const char* driver_path, const char* native_dir, const char* cache_dir);
+
+void* loadTurnipVulkan(
+        const char* driver_path,
+        const char* native_dir,
+        const char* cache_dir
+);
+
 void calculateFPS(void);
 
-extern void updateMonitorSize(int width, int height);
-extern jboolean ensureGlfwNativeBridgeInitialized(JNIEnv *env);
+extern void updateMonitorSize(
+        int width,
+        int height
+);
+
+extern jboolean ensureGlfwNativeBridgeInitialized(
+        JNIEnv *env
+);
 
 
 /*
@@ -65,10 +96,37 @@ extern jboolean ensureGlfwNativeBridgeInitialized(JNIEnv *env);
  * ============================================================
  *
  * Statistics are calculated from the real time between
- * successive pojavSwapBuffers() calls.
+ * successive FPS sampling points.
+ *
+ * For GL4ES:
+ *
+ *     sdl_hook.c
+ *          |
+ *          +--> proxyEglSwapBuffers()
+ *                    |
+ *                    +--> calculateFPS()
+ *                    |
+ *                    +--> real EGL swap
+ *
+ * For VIRGL:
+ *
+ *     pojavSwapBuffers()
+ *          |
+ *          +--> virglSwapBuffers()
+ *          |
+ *          +--> calculateFPS()
+ *
+ * Vulkan:
+ *
+ *     VK_updateFps()
+ *          |
+ *          +--> calculateFPS()
+ *
  *
  * History window:
+ *
  *     2 seconds
+ *
  *
  * Returned JNI array:
  *
@@ -78,59 +136,91 @@ extern jboolean ensureGlfwNativeBridgeInitialized(JNIEnv *env);
  *     [3] maximum FPS
  *     [4] frame time in microseconds
  *
- * CLOCK_MONOTONIC is used instead of time(NULL), because
- * time(NULL) only has one-second resolution.
+ *
+ * CLOCK_MONOTONIC is used instead of time(NULL),
+ * because time(NULL) only has one-second resolution.
  */
 
-#define FRAME_STATS_WINDOW_NS   2000000000ULL
+#define FRAME_STATS_WINDOW_NS    2000000000ULL
 #define FRAME_STATS_HISTORY_SIZE 1024
+
 
 typedef struct {
     uint64_t timestampNs;
     int fps;
 } FrameStatsSample;
 
+
 static pthread_mutex_t frameStatsMutex =
         PTHREAD_MUTEX_INITIALIZER;
+
 
 static FrameStatsSample frameStatsHistory[
         FRAME_STATS_HISTORY_SIZE
 ];
 
+
 static size_t frameStatsHistoryStart = 0;
 static size_t frameStatsHistoryCount = 0;
 
+
+/*
+ * Timestamp of the previous frame sampling point.
+ */
 static uint64_t lastFrameTimestampNs = 0;
 
+
+/*
+ * Current instantaneous FPS.
+ */
 static int fps = 0;
+
+
+/*
+ * Rolling statistics.
+ */
 static int minFps = 0;
 static int averageFps = 0;
 static int maxFps = 0;
 
+
+/*
+ * Time between the latest two frame sampling points.
+ */
 static double frameTimeMs = 0.0;
 
 
 /*
- * Get monotonic time in nanoseconds.
+ * ============================================================
+ * Monotonic clock
+ * ============================================================
  */
+
 static uint64_t getMonotonicTimeNs(void) {
     struct timespec ts;
 
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+    if (clock_gettime(
+            CLOCK_MONOTONIC,
+            &ts
+    ) != 0) {
         return 0;
     }
 
     return
-        (uint64_t) ts.tv_sec * 1000000000ULL +
-        (uint64_t) ts.tv_nsec;
+            (uint64_t) ts.tv_sec *
+            1000000000ULL +
+            (uint64_t) ts.tv_nsec;
 }
 
 
 /*
- * Reset all frame statistics.
+ * ============================================================
+ * Reset frame statistics
+ * ============================================================
  *
  * Caller must hold frameStatsMutex.
  */
+
 static void resetFrameStatsLocked(void) {
     frameStatsHistoryStart = 0;
     frameStatsHistoryCount = 0;
@@ -149,36 +239,55 @@ static void resetFrameStatsLocked(void) {
 /*
  * Public reset function.
  */
+
 static void resetFrameStatsInternal(void) {
-    pthread_mutex_lock(&frameStatsMutex);
+    pthread_mutex_lock(
+            &frameStatsMutex
+    );
 
     resetFrameStatsLocked();
 
-    pthread_mutex_unlock(&frameStatsMutex);
+    pthread_mutex_unlock(
+            &frameStatsMutex
+    );
 }
 
 
 /*
- * Remove samples older than the rolling window.
+ * ============================================================
+ * Rolling history
+ * ============================================================
+ *
+ * Remove samples older than FRAME_STATS_WINDOW_NS.
  *
  * Caller must hold frameStatsMutex.
  */
-static void pruneFrameStatsLocked(uint64_t nowNs) {
+
+static void pruneFrameStatsLocked(
+        uint64_t nowNs
+) {
     while (frameStatsHistoryCount > 0) {
+
         FrameStatsSample *oldest =
-                &frameStatsHistory[frameStatsHistoryStart];
+                &frameStatsHistory[
+                        frameStatsHistoryStart
+                ];
 
         /*
-         * Protect against an invalid clock difference.
+         * Keep samples that are inside the
+         * two-second rolling window.
          */
         if (nowNs >= oldest->timestampNs &&
-            nowNs - oldest->timestampNs <= FRAME_STATS_WINDOW_NS) {
+            nowNs - oldest->timestampNs <=
+                    FRAME_STATS_WINDOW_NS) {
+
             break;
         }
 
         frameStatsHistoryStart =
-                (frameStatsHistoryStart + 1)
-                % FRAME_STATS_HISTORY_SIZE;
+                (
+                        frameStatsHistoryStart + 1
+                ) % FRAME_STATS_HISTORY_SIZE;
 
         frameStatsHistoryCount--;
     }
@@ -186,52 +295,69 @@ static void pruneFrameStatsLocked(uint64_t nowNs) {
 
 
 /*
- * Add a new instantaneous FPS sample.
+ * Add one instantaneous FPS sample.
  *
  * Caller must hold frameStatsMutex.
  */
+
 static void addFrameStatsSampleLocked(
         uint64_t timestampNs,
         int sampleFps
 ) {
     size_t index;
 
-    if (frameStatsHistoryCount < FRAME_STATS_HISTORY_SIZE) {
+    if (frameStatsHistoryCount <
+        FRAME_STATS_HISTORY_SIZE) {
+
         index =
-                (frameStatsHistoryStart +
-                 frameStatsHistoryCount)
-                % FRAME_STATS_HISTORY_SIZE;
+                (
+                        frameStatsHistoryStart +
+                        frameStatsHistoryCount
+                ) % FRAME_STATS_HISTORY_SIZE;
 
         frameStatsHistoryCount++;
+
     } else {
+
         /*
          * Ring buffer full.
-         * Replace the oldest sample.
+         * Replace the oldest entry.
          */
         index = frameStatsHistoryStart;
 
         frameStatsHistoryStart =
-                (frameStatsHistoryStart + 1)
-                % FRAME_STATS_HISTORY_SIZE;
+                (
+                        frameStatsHistoryStart + 1
+                ) % FRAME_STATS_HISTORY_SIZE;
     }
 
-    frameStatsHistory[index].timestampNs = timestampNs;
-    frameStatsHistory[index].fps = sampleFps;
+    frameStatsHistory[index].timestampNs =
+            timestampNs;
+
+    frameStatsHistory[index].fps =
+            sampleFps;
 }
 
 
 /*
- * Recalculate min/average/max FPS.
+ * ============================================================
+ * Recalculate rolling min / average / max
+ * ============================================================
  *
  * Caller must hold frameStatsMutex.
  */
+
 static void recomputeFrameStatsLocked(void) {
+
     if (frameStatsHistoryCount == 0) {
+
         minFps = 0;
         averageFps = 0;
         maxFps = 0;
+
         return;
     }
+
 
     int minValue =
             frameStatsHistory[
@@ -240,37 +366,50 @@ static void recomputeFrameStatsLocked(void) {
 
     int maxValue = minValue;
 
+
     uint64_t sum = 0;
+
 
     for (size_t i = 0;
          i < frameStatsHistoryCount;
          ++i) {
 
         size_t index =
-                (frameStatsHistoryStart + i)
-                % FRAME_STATS_HISTORY_SIZE;
+                (
+                        frameStatsHistoryStart +
+                        i
+                ) % FRAME_STATS_HISTORY_SIZE;
+
 
         int value =
                 frameStatsHistory[index].fps;
+
 
         if (value < minValue) {
             minValue = value;
         }
 
+
         if (value > maxValue) {
             maxValue = value;
         }
 
+
         sum += (uint64_t) value;
     }
+
 
     minFps = minValue;
     maxFps = maxValue;
 
+
     averageFps =
             (int) (
-                    (sum + frameStatsHistoryCount / 2)
-                    / frameStatsHistoryCount
+                    (
+                            sum +
+                            frameStatsHistoryCount / 2
+                    ) /
+                    frameStatsHistoryCount
             );
 }
 
@@ -282,15 +421,25 @@ static void recomputeFrameStatsLocked(void) {
  */
 
 EXTERNAL_API void pojavTerminate() {
-    printf("EGLBridge: Terminating\n");
+
+    printf(
+            "EGLBridge: Terminating\n"
+    );
+
 
     /*
-     * Stop reporting stale FPS data after Minecraft terminates.
+     * Stop reporting stale FPS data after
+     * Minecraft terminates.
      */
     resetFrameStatsInternal();
 
-    switch (pojav_environ->config_renderer) {
+
+    switch (
+            pojav_environ->config_renderer
+    ) {
+
         case RENDERER_GL4ES: {
+
             eglMakeCurrent_p(
                     potatoBridge.eglDisplay,
                     EGL_NO_SURFACE,
@@ -298,34 +447,55 @@ EXTERNAL_API void pojavTerminate() {
                     EGL_NO_CONTEXT
             );
 
+
             eglDestroySurface_p(
                     potatoBridge.eglDisplay,
                     potatoBridge.eglSurface
             );
+
 
             eglDestroyContext_p(
                     potatoBridge.eglDisplay,
                     potatoBridge.eglContext
             );
 
+
             eglTerminate_p(
                     potatoBridge.eglDisplay
             );
 
+
             eglReleaseThread_p();
 
-            potatoBridge.eglContext = EGL_NO_CONTEXT;
-            potatoBridge.eglDisplay = EGL_NO_DISPLAY;
-            potatoBridge.eglSurface = EGL_NO_SURFACE;
+
+            potatoBridge.eglContext =
+                    EGL_NO_CONTEXT;
+
+            potatoBridge.eglDisplay =
+                    EGL_NO_DISPLAY;
+
+            potatoBridge.eglSurface =
+                    EGL_NO_SURFACE;
+
         } break;
 
-        //case RENDERER_VIRGL:
+
         case RENDERER_VK_ZINK: {
-            // Nothing to do here
+
+            /*
+             * Nothing to do here.
+             */
+
         } break;
     }
 }
 
+
+/*
+ * ============================================================
+ * Bridge window
+ * ============================================================
+ */
 
 JNIEXPORT void JNICALL
 Java_com_movtery_zalithlauncher_bridge_ZLBridge_setupBridgeWindow(
@@ -333,6 +503,7 @@ Java_com_movtery_zalithlauncher_bridge_ZLBridge_setupBridgeWindow(
         ABI_COMPAT jclass clazz,
         jobject surface
 ) {
+
     /*
      * 首个窗口由 pojavInit 应用交换间隔；
      * 此处处理窗口重建（旋转、分屏等）。
@@ -340,27 +511,42 @@ Java_com_movtery_zalithlauncher_bridge_ZLBridge_setupBridgeWindow(
      * 生产者状态会随新窗口重置，若不重新应用，
      * MC 不会再次发起交换间隔调用，帧率会退回锁定在屏幕刷新率。
      */
+
     bool windowRecreated =
             pojav_environ->pojavWindow != NULL;
 
+
     pojav_environ->pojavWindow =
-            ANativeWindow_fromSurface(env, surface);
+            ANativeWindow_fromSurface(
+                    env,
+                    surface
+            );
+
 
     if (windowRecreated &&
-        pojav_environ->config_renderer != RENDERER_VULKAN) {
+        pojav_environ->config_renderer !=
+                RENDERER_VULKAN) {
 
         if (lastSwapInterval >= 0) {
+
             setNativeWindowSwapInterval(
                     pojav_environ->pojavWindow,
                     lastSwapInterval
             );
-        } else if (!getenv("POJAV_VSYNC_IN_ZINK")) {
+
+        } else if (
+                !getenv(
+                        "POJAV_VSYNC_IN_ZINK"
+                )
+        ) {
+
             setNativeWindowSwapInterval(
                     pojav_environ->pojavWindow,
                     0
             );
         }
     }
+
 
     if (br_setup_window) {
         br_setup_window();
@@ -373,31 +559,51 @@ Java_com_movtery_zalithlauncher_bridge_ZLBridge_releaseBridgeWindow(
         ABI_COMPAT JNIEnv *env,
         ABI_COMPAT jclass clazz
 ) {
+
     ANativeWindow_release(
             pojav_environ->pojavWindow
     );
 }
 
 
+/*
+ * ============================================================
+ * Current context
+ * ============================================================
+ */
+
 EXTERNAL_API void* pojavGetCurrentContext() {
+
     if (pojav_environ->config_renderer ==
         RENDERER_VIRGL) {
 
         return virglGetCurrentContext();
     }
 
+
     return br_get_current();
 }
 
 
-static void set_vulkan_ptr(void* ptr) {
+/*
+ * ============================================================
+ * Vulkan
+ * ============================================================
+ */
+
+static void set_vulkan_ptr(
+        void* ptr
+) {
+
     char envval[64];
+
 
     sprintf(
             envval,
             "%" PRIxPTR,
             (uintptr_t) ptr
     );
+
 
     setenv(
             "VULKAN_PTR",
@@ -408,21 +614,29 @@ static void set_vulkan_ptr(void* ptr) {
 
 
 void load_vulkan() {
+
     const char* zinkPreferSystemDriver =
-            getenv("POJAV_ZINK_PREFER_SYSTEM_DRIVER");
+            getenv(
+                    "POJAV_ZINK_PREFER_SYSTEM_DRIVER"
+            );
+
 
     int deviceApiLevel =
             android_get_device_api_level();
+
 
     if (zinkPreferSystemDriver == NULL &&
         deviceApiLevel >= 28) {
 
 #ifdef ADRENO_POSSIBLE
+
         const char* native_dir =
                 getenv("DRIVER_PATH");
 
+
         const char* cache_dir =
                 getenv("TMPDIR");
+
 
         void* result =
                 loadTurnipVulkan(
@@ -431,21 +645,28 @@ void load_vulkan() {
                         cache_dir
                 );
 
+
         if (result != NULL) {
+
             printf(
                     "AdrenoSupp: Loaded Turnip, loader address: %p\n",
                     result
             );
 
+
             set_vulkan_ptr(result);
+
             return;
         }
+
 #endif
     }
+
 
     printf(
             "OSMDroid: Loading Vulkan regularly...\n"
     );
+
 
     void* vulkanPtr =
             dlopen(
@@ -453,34 +674,55 @@ void load_vulkan() {
                     RTLD_LAZY | RTLD_LOCAL
             );
 
+
     printf(
             "OSMDroid: Loaded Vulkan, ptr=%p\n",
             vulkanPtr
     );
 
-    set_vulkan_ptr(vulkanPtr);
+
+    set_vulkan_ptr(
+            vulkanPtr
+    );
 }
 
 
+/*
+ * ============================================================
+ * Renderer initialization
+ * ============================================================
+ */
+
 int pojavInitOpenGL() {
+
     const char *renderer =
             getenv("POJAV_RENDERER");
 
-    if (!strncmp("opengles", renderer, 8)) {
+
+    if (!strncmp(
+            "opengles",
+            renderer,
+            8
+    )) {
+
         pojav_environ->config_renderer =
                 RENDERER_GL4ES;
+
 
         if (!strcmp(
                 renderer,
                 "opengles3_desktopgl_zink_kopper"
         )) {
+
             load_vulkan();
+
 
             setenv(
                     "GALLIUM_DRIVER",
                     "zink",
                     1
             );
+
 
             setenv(
                     "MESA_ANDROID_NO_KMS_SWRAST",
@@ -489,22 +731,37 @@ int pojavInitOpenGL() {
             );
         }
 
+
         set_gl_bridge_tbl();
     }
 
-    if (!strcmp(renderer, "custom_gallium")) {
+
+    if (!strcmp(
+            renderer,
+            "custom_gallium"
+    )) {
+
         pojav_environ->config_renderer =
                 RENDERER_VK_ZINK;
 
+
         load_vulkan();
+
         set_osm_bridge_tbl();
     }
 
-    if (!strcmp(renderer, "vulkan_zink")) {
+
+    if (!strcmp(
+            renderer,
+            "vulkan_zink"
+    )) {
+
         pojav_environ->config_renderer =
                 RENDERER_VK_ZINK;
 
+
         load_vulkan();
+
 
         setenv(
                 "GALLIUM_DRIVER",
@@ -512,14 +769,22 @@ int pojavInitOpenGL() {
                 1
         );
 
+
         set_osm_bridge_tbl();
     }
 
-    if (!strcmp(renderer, "gallium_freedreno")) {
+
+    if (!strcmp(
+            renderer,
+            "gallium_freedreno"
+    )) {
+
         pojav_environ->config_renderer =
                 RENDERER_VK_ZINK;
 
+
         load_vulkan();
+
 
         setenv(
                 "MESA_LOADER_DRIVER_OVERRIDE",
@@ -527,18 +792,26 @@ int pojavInitOpenGL() {
                 1
         );
 
+
         setenv(
                 "GALLIUM_DRIVER",
                 "freedreno",
                 1
         );
 
+
         set_osm_bridge_tbl();
     }
 
-    if (!strcmp(renderer, "gallium_panfrost")) {
+
+    if (!strcmp(
+            renderer,
+            "gallium_panfrost"
+    )) {
+
         pojav_environ->config_renderer =
                 RENDERER_VK_ZINK;
+
 
         setenv(
                 "GALLIUM_DRIVER",
@@ -546,18 +819,26 @@ int pojavInitOpenGL() {
                 1
         );
 
+
         setenv(
                 "MESA_DISK_CACHE_SINGLE_FILE",
                 "1",
                 1
         );
 
+
         set_osm_bridge_tbl();
     }
 
-    if (!strcmp(renderer, "gallium_virgl")) {
+
+    if (!strcmp(
+            renderer,
+            "gallium_virgl"
+    )) {
+
         pojav_environ->config_renderer =
                 RENDERER_VIRGL;
+
 
         setenv(
                 "GALLIUM_DRIVER",
@@ -565,11 +846,13 @@ int pojavInitOpenGL() {
                 1
         );
 
+
         setenv(
                 "OSMESA_NO_FLUSH_FRONTBUFFER",
                 "1",
-                false
+                1
         );
+
 
         setenv(
                 "MESA_GL_VERSION_OVERRIDE",
@@ -577,45 +860,61 @@ int pojavInitOpenGL() {
                 1
         );
 
+
         setenv(
                 "MESA_GLSL_VERSION_OVERRIDE",
                 "430",
                 1
         );
 
+
         if (!strcmp(
-                getenv("OSMESA_NO_FLUSH_FRONTBUFFER"),
+                getenv(
+                        "OSMESA_NO_FLUSH_FRONTBUFFER"
+                ),
                 "1"
         )) {
+
             printf(
                     "VirGL: OSMesa buffer flush is DISABLED!\n"
             );
         }
 
+
         loadSymbolsVirGL();
+
         virglInit();
 
         return 0;
     }
 
+
     if (br_init()) {
         br_setup_window();
     }
+
 
     return 0;
 }
 
 
 /*
+ * ============================================================
+ * JNIEnv helper
+ * ============================================================
+ *
  * 获取当前线程的 JNIEnv。
  *
  * 未附着则 Attach。
  * 不 Detach，保留渲染线程的附着状态。
  */
+
 static JNIEnv *get_attached_env_for_renderer(
         JavaVM *jvm
 ) {
+
     JNIEnv *jvm_env = NULL;
+
 
     jint env_result =
             (*jvm)->GetEnv(
@@ -624,7 +923,10 @@ static JNIEnv *get_attached_env_for_renderer(
                     JNI_VERSION_1_4
             );
 
-    if (env_result == JNI_EDETACHED) {
+
+    if (env_result ==
+        JNI_EDETACHED) {
+
         env_result =
                 (*jvm)->AttachCurrentThread(
                         jvm,
@@ -633,60 +935,84 @@ static JNIEnv *get_attached_env_for_renderer(
                 );
     }
 
+
     if (env_result != JNI_OK) {
+
         printf(
                 "get_attached_env failed: %i\n",
                 env_result
         );
 
+
         return NULL;
     }
+
 
     return jvm_env;
 }
 
 
+/*
+ * ============================================================
+ * Renderer initialization entry point
+ * ============================================================
+ */
+
 EXTERNAL_API int pojavInit() {
+
     pojav_environ->glfwThreadVmEnv =
             get_attached_env_for_renderer(
                     pojav_environ->runtimeJavaVMPtr
             );
 
-    if (pojav_environ->glfwThreadVmEnv == NULL) {
+
+    if (pojav_environ->glfwThreadVmEnv ==
+        NULL) {
+
         printf(
                 "Failed to attach Java-side JNIEnv to GLFW thread\n"
         );
 
+
         return 0;
     }
 
+
     /*
-     * 桥初始化可能在其它线程上先行失败，
-     * 此处于渲染线程兜底重试。
+     * Bridge initialization may have happened
+     * on another thread and failed.
+     *
+     * Retry here on the renderer thread.
      */
     if (!ensureGlfwNativeBridgeInitialized(
             pojav_environ->glfwThreadVmEnv
     )) {
+
         printf(
                 "pojavInit: GLFW bridge is not initialized\n"
         );
 
+
         return 0;
     }
+
 
     ANativeWindow_acquire(
             pojav_environ->pojavWindow
     );
+
 
     pojav_environ->savedWidth =
             ANativeWindow_getWidth(
                     pojav_environ->pojavWindow
             );
 
+
     pojav_environ->savedHeight =
             ANativeWindow_getHeight(
                     pojav_environ->pojavWindow
             );
+
 
     ANativeWindow_setBuffersGeometry(
             pojav_environ->pojavWindow,
@@ -695,25 +1021,34 @@ EXTERNAL_API int pojavInit() {
             AHARDWAREBUFFER_FORMAT_R8G8B8X8_UNORM
     );
 
+
     updateMonitorSize(
             pojav_environ->savedWidth,
             pojav_environ->savedHeight
     );
 
+
     /*
-     * Start with a clean frame-statistics window.
+     * Start with a completely clean frame
+     * statistics window.
      */
     resetFrameStatsInternal();
 
+
     pojavInitOpenGL();
 
+
     /*
-     * 垂直同步开关关闭时主动切入异步模式，
-     * 解除帧率对屏幕刷新率的锁定；
-     * 开启时交由 MC 的交换间隔调用决定。
+     * When VSync is disabled, explicitly switch
+     * the native window to asynchronous mode.
+     *
+     * When enabled, Minecraft controls the swap interval.
      */
-    if (pojav_environ->config_renderer != RENDERER_VULKAN &&
-        !getenv("POJAV_VSYNC_IN_ZINK")) {
+    if (pojav_environ->config_renderer !=
+            RENDERER_VULKAN &&
+        !getenv(
+                "POJAV_VSYNC_IN_ZINK"
+        )) {
 
         setNativeWindowSwapInterval(
                 pojav_environ->pojavWindow,
@@ -721,57 +1056,88 @@ EXTERNAL_API int pojavInit() {
         );
     }
 
+
     return 1;
 }
 
+
+/*
+ * ============================================================
+ * Window hints
+ * ============================================================
+ */
 
 EXTERNAL_API void pojavSetWindowHint(
         int hint,
         int value
 ) {
+
     if (hint != GLFW_CLIENT_API) {
         return;
     }
 
+
     switch (value) {
+
         case GLFW_NO_API:
+
             pojav_environ->config_renderer =
                     RENDERER_VULKAN;
 
+
             /*
              * Nothing to do:
-             * initialization is handled in Java-side
+             * initialization is handled in Java-side.
              */
+
             break;
 
-        case GLFW_OPENGL_API: {
-            const char *renderer =
-                    getenv("POJAV_RENDERER");
 
-            if (!strncmp("opengles", renderer, 8)) {
+        case GLFW_OPENGL_API: {
+
+            const char *renderer =
+                    getenv(
+                            "POJAV_RENDERER"
+                    );
+
+
+            if (!strncmp(
+                    "opengles",
+                    renderer,
+                    8
+            )) {
+
                 pojav_environ->config_renderer =
                         RENDERER_GL4ES;
+
 
             } else if (!strcmp(
                     renderer,
                     "vulkan_zink"
             )) {
+
                 pojav_environ->config_renderer =
                         RENDERER_VK_ZINK;
             }
 
+
             /*
              * Nothing to do:
-             * initialization is called in pojavCreateContext
+             * initialization is called in
+             * pojavCreateContext.
              */
+
             break;
         }
 
+
         default:
+
             printf(
                     "GLFW: Unimplemented API 0x%x\n",
                     value
             );
+
 
             abort();
     }
@@ -783,14 +1149,22 @@ EXTERNAL_API void pojavSetWindowHint(
  * Frame submission
  * ============================================================
  *
- * calculateFPS() is called immediately before the native
- * renderer performs the actual swap.
+ * IMPORTANT:
  *
- * This makes frame time represent the interval between
- * successive Minecraft swap requests.
+ * GL4ES is NOT sampled here.
+ *
+ * sdl_hook.c already calls calculateFPS() from:
+ *
+ *     proxyEglSwapBuffers()
+ *
+ * Calling it here too would count the same frame twice.
+ *
+ *
+ * VIRGL does not go through that SDL EGL proxy, therefore
+ * VIRGL is sampled after virglSwapBuffers().
  */
+
 EXTERNAL_API void pojavSwapBuffers() {
-    calculateFPS();
 
     if (pojav_environ->config_renderer ==
             RENDERER_VK_ZINK ||
@@ -798,19 +1172,33 @@ EXTERNAL_API void pojavSwapBuffers() {
             RENDERER_GL4ES) {
 
         br_swap_buffers();
+
+        return;
     }
+
 
     if (pojav_environ->config_renderer ==
             RENDERER_VIRGL) {
 
         virglSwapBuffers();
+
+        calculateFPS();
+
+        return;
     }
 }
 
 
+/*
+ * ============================================================
+ * Make current
+ * ============================================================
+ */
+
 EXTERNAL_API void pojavMakeCurrent(
         void* window
 ) {
+
     if (pojav_environ->config_renderer ==
             RENDERER_VK_ZINK ||
         pojav_environ->config_renderer ==
@@ -821,23 +1209,34 @@ EXTERNAL_API void pojavMakeCurrent(
         );
     }
 
+
     if (pojav_environ->config_renderer ==
             RENDERER_VIRGL) {
 
-        virglMakeCurrent(window);
+        virglMakeCurrent(
+                window
+        );
     }
 }
 
 
+/*
+ * ============================================================
+ * Create context
+ * ============================================================
+ */
+
 EXTERNAL_API void* pojavCreateContext(
         void* contextSrc
 ) {
+
     if (pojav_environ->config_renderer ==
             RENDERER_VULKAN) {
 
         return (void *)
                 pojav_environ->pojavWindow;
     }
+
 
     if (pojav_environ->config_renderer ==
             RENDERER_VIRGL) {
@@ -847,22 +1246,33 @@ EXTERNAL_API void* pojavCreateContext(
         );
     }
 
+
     return br_init_context(
             (basic_render_window_t*) contextSrc
     );
 }
 
 
+/*
+ * ============================================================
+ * Vulkan helper
+ * ============================================================
+ */
+
 void* maybe_load_vulkan() {
+
     /*
-     * We use the env var because
-     * 1. it's easier to do that
-     * 2. it won't break if something will try to load
-     *    vulkan and osmesa simultaneously
+     * We use the environment variable because:
+     *
+     * 1. it's easier to do that;
+     * 2. it won't break if something tries to load
+     *    Vulkan and OSMesa simultaneously.
      */
+
     if (getenv("VULKAN_PTR") == NULL) {
         load_vulkan();
     }
+
 
     return (void*)
             strtoul(
@@ -877,41 +1287,71 @@ void* maybe_load_vulkan() {
  * ============================================================
  * FPS calculation
  * ============================================================
+ *
+ * This function is intentionally renderer-independent.
+ *
+ * The caller decides where the actual frame boundary is.
+ *
+ * GL4ES:
+ *     SDL EGL proxy
+ *
+ * VIRGL:
+ *     pojavSwapBuffers()
+ *
+ * Vulkan:
+ *     VK_updateFps()
  */
 
 void calculateFPS() {
+
     const uint64_t nowNs =
             getMonotonicTimeNs();
 
+
     if (nowNs != 0) {
+
         pthread_mutex_lock(
                 &frameStatsMutex
         );
 
+
         /*
-         * First frame only establishes the timestamp.
+         * First sample only establishes the
+         * timestamp baseline.
          */
         if (lastFrameTimestampNs == 0) {
-            lastFrameTimestampNs = nowNs;
-        } else {
-            uint64_t deltaNs =
-                    nowNs - lastFrameTimestampNs;
 
-            lastFrameTimestampNs = nowNs;
+            lastFrameTimestampNs =
+                    nowNs;
+
+
+        } else if (
+                nowNs >= lastFrameTimestampNs
+        ) {
 
             /*
-             * A pause longer than the statistics window
-             * means the old frame interval is not meaningful.
-             *
-             * This prevents opening a paused game from
-             * producing a fake 1 FPS result.
+             * Normal monotonic-clock path.
+             */
+            const uint64_t deltaNs =
+                    nowNs -
+                    lastFrameTimestampNs;
+
+
+            lastFrameTimestampNs =
+                    nowNs;
+
+
+            /*
+             * Valid frame interval.
              */
             if (deltaNs > 0 &&
-                deltaNs <= FRAME_STATS_WINDOW_NS) {
+                deltaNs <=
+                        FRAME_STATS_WINDOW_NS) {
 
                 frameTimeMs =
                         (double) deltaNs /
                         1000000.0;
+
 
                 int currentFps =
                         (int) (
@@ -921,29 +1361,41 @@ void calculateFPS() {
                                 ) + 0.5
                         );
 
+
                 if (currentFps < 1) {
                     currentFps = 1;
                 }
 
+
                 fps = currentFps;
+
 
                 pruneFrameStatsLocked(
                         nowNs
                 );
+
 
                 addFrameStatsSampleLocked(
                         nowNs,
                         currentFps
                 );
 
+
                 recomputeFrameStatsLocked();
 
+
             } else if (
-                    deltaNs > FRAME_STATS_WINDOW_NS
+                    deltaNs >
+                    FRAME_STATS_WINDOW_NS
             ) {
+
                 /*
-                 * Long pause / background / surface pause.
+                 * Long pause / background /
+                 * surface pause.
+                 *
+                 * Do not report a fake 1 FPS.
                  */
+
                 frameStatsHistoryStart = 0;
                 frameStatsHistoryCount = 0;
 
@@ -954,24 +1406,56 @@ void calculateFPS() {
 
                 frameTimeMs = 0.0;
             }
+
+
+        } else {
+
+            /*
+             * Defensive protection against an unexpected
+             * monotonic-clock anomaly.
+             *
+             * Do not create an enormous unsigned delta.
+             */
+
+            lastFrameTimestampNs =
+                    nowNs;
+
+
+            frameStatsHistoryStart = 0;
+            frameStatsHistoryCount = 0;
+
+            fps = 0;
+            minFps = 0;
+            averageFps = 0;
+            maxFps = 0;
+
+            frameTimeMs = 0.0;
         }
+
 
         pthread_mutex_unlock(
                 &frameStatsMutex
         );
     }
 
+
     /*
-     * Existing graphic-output callback logic.
+     * ========================================================
+     * Existing graphic-output callback logic
+     * ========================================================
      */
+
     if (!pojav_environ->hasGraphicOutput &&
         pojav_environ->dalvikJavaVMPtr &&
         pojav_environ->bridgeClazz &&
         pojav_environ->method_onGraphicOutput) {
 
-        pojav_environ->hasGraphicOutput = true;
+        pojav_environ->hasGraphicOutput =
+                true;
+
 
         JNIEnv *dalvikEnv = NULL;
+
 
         jboolean detachedBefore =
                 (*pojav_environ->dalvikJavaVMPtr)
@@ -981,7 +1465,9 @@ void calculateFPS() {
                         JNI_VERSION_1_4
                 ) == JNI_EDETACHED;
 
+
         if (detachedBefore) {
+
             (*pojav_environ->dalvikJavaVMPtr)
             ->AttachCurrentThread(
                     pojav_environ->dalvikJavaVMPtr,
@@ -990,7 +1476,9 @@ void calculateFPS() {
             );
         }
 
+
         if (dalvikEnv != NULL) {
+
             (*dalvikEnv)
             ->CallStaticVoidMethod(
                     dalvikEnv,
@@ -998,7 +1486,9 @@ void calculateFPS() {
                     pojav_environ->method_onGraphicOutput
             );
 
+
             if (detachedBefore) {
+
                 (*pojav_environ->dalvikJavaVMPtr)
                 ->DetachCurrentThread(
                         pojav_environ->dalvikJavaVMPtr
@@ -1010,16 +1500,20 @@ void calculateFPS() {
 
 
 /*
- * LWJGL Vulkan FPS callback.
+ * ============================================================
+ * LWJGL Vulkan FPS callback
+ * ============================================================
  *
  * Keep this for render paths where the Java-side Vulkan
  * implementation explicitly calls VK.updateFps().
  */
+
 EXTERNAL_API JNIEXPORT void JNICALL
 Java_org_lwjgl_vulkan_VK_updateFps(
         ABI_COMPAT JNIEnv *env,
         ABI_COMPAT jclass thiz
 ) {
+
     calculateFPS();
 }
 
@@ -1030,36 +1524,48 @@ Java_org_lwjgl_vulkan_VK_updateFps(
  * ============================================================
  */
 
+
 /*
  * Current instantaneous FPS.
  */
+
 EXTERNAL_API JNIEXPORT jint JNICALL
 Java_org_lwjgl_glfw_CallbackBridge_getCurrentFps(
         JNIEnv *env,
         jclass clazz
 ) {
+
     jint result;
+
 
     pthread_mutex_lock(
             &frameStatsMutex
     );
 
-    result = (jint) fps;
+
+    result =
+            (jint) fps;
+
 
     pthread_mutex_unlock(
             &frameStatsMutex
     );
+
 
     return result;
 }
 
 
 /*
- * Complete performance statistics.
+ * ============================================================
+ * Complete performance statistics
+ * ============================================================
  *
  * Java:
  *
- *     long[] values = CallbackBridge.getFrameStats();
+ *     long[] values =
+ *         CallbackBridge.getFrameStats();
+ *
  *
  * values:
  *
@@ -1069,36 +1575,55 @@ Java_org_lwjgl_glfw_CallbackBridge_getCurrentFps(
  *     [3] maximum FPS
  *     [4] frame time in microseconds
  */
+
 EXTERNAL_API JNIEXPORT jlongArray JNICALL
 Java_org_lwjgl_glfw_CallbackBridge_getFrameStats(
         JNIEnv *env,
         jclass clazz
 ) {
+
     jlong values[5];
+
 
     pthread_mutex_lock(
             &frameStatsMutex
     );
 
-    values[0] = (jlong) fps;
-    values[1] = (jlong) minFps;
-    values[2] = (jlong) averageFps;
-    values[3] = (jlong) maxFps;
+
+    values[0] =
+            (jlong) fps;
+
+
+    values[1] =
+            (jlong) minFps;
+
+
+    values[2] =
+            (jlong) averageFps;
+
+
+    values[3] =
+            (jlong) maxFps;
+
 
     /*
-     * Java expects microseconds here.
+     * Java expects microseconds.
      *
-     * frameTimeMs -> microseconds
+     * frameTimeMs -> microseconds.
      */
+
     values[4] =
             (jlong) (
-                    frameTimeMs * 1000.0 +
+                    frameTimeMs *
+                    1000.0 +
                     0.5
             );
+
 
     pthread_mutex_unlock(
             &frameStatsMutex
     );
+
 
     jlongArray result =
             (*env)->NewLongArray(
@@ -1106,9 +1631,11 @@ Java_org_lwjgl_glfw_CallbackBridge_getFrameStats(
                     5
             );
 
+
     if (result == NULL) {
         return NULL;
     }
+
 
     (*env)->SetLongArrayRegion(
             env,
@@ -1118,33 +1645,43 @@ Java_org_lwjgl_glfw_CallbackBridge_getFrameStats(
             values
     );
 
+
     return result;
 }
 
 
 /*
- * Reset statistics from Java.
+ * ============================================================
+ * Reset statistics from Java
+ * ============================================================
  */
+
 EXTERNAL_API JNIEXPORT void JNICALL
 Java_org_lwjgl_glfw_CallbackBridge_resetFrameStats(
         JNIEnv *env,
         jclass clazz
 ) {
+
     resetFrameStatsInternal();
 }
 
 
 /*
- * Vulkan driver handle.
+ * ============================================================
+ * Vulkan driver handle
+ * ============================================================
  */
+
 EXTERNAL_API JNIEXPORT jlong JNICALL
 Java_org_lwjgl_vulkan_VK_getVulkanDriverHandle(
         ABI_COMPAT JNIEnv *env,
         ABI_COMPAT jclass thiz
 ) {
+
     printf(
             "EGLBridge: LWJGL-side Vulkan loader requested the Vulkan handle\n"
     );
+
 
     return (jlong)
             maybe_load_vulkan();
@@ -1160,19 +1697,27 @@ Java_org_lwjgl_vulkan_VK_getVulkanDriverHandle(
 EXTERNAL_API void pojavSwapInterval(
         int interval
 ) {
-    lastSwapInterval = interval;
+
+    lastSwapInterval =
+            interval;
+
 
     if (pojav_environ->config_renderer ==
             RENDERER_VK_ZINK ||
         pojav_environ->config_renderer ==
             RENDERER_GL4ES) {
 
-        br_swap_interval(interval);
+        br_swap_interval(
+                interval
+        );
     }
+
 
     if (pojav_environ->config_renderer ==
             RENDERER_VIRGL) {
 
-        virglSwapInterval(interval);
+        virglSwapInterval(
+                interval
+        );
     }
 }
